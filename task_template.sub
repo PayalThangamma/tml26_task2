@@ -1,0 +1,23 @@
+universe = docker
+docker_image = pytorch/pytorch:2.3.1-cuda12.1-cudnn8-devel
+
+executable = run_task_template.sh
+transfer_input_files = run_task_template.sh
+
+should_transfer_files = YES
+when_to_transfer_output = ON_EXIT
+
+output = runlogs/task2.$(ClusterId).$(ProcId).out
+error = runlogs/task2.$(ClusterId).$(ProcId).err
+log = runlogs/task2.$(ClusterId).log
+
+request_GPUs = 1
+request_CPUs = 1
+request_memory = 16G
+request_disk = 30G
+
+requirements = UidDomain == "cs.uni-saarland.de"
++WantGPUHomeMounted = true
++WantScratchMounted = true
+
+queue 1
