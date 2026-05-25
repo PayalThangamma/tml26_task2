@@ -20,10 +20,10 @@ def make_model():
     model.fc = nn.Linear(model.fc.in_features, 100)
     return model
 
-checkpoint_path = "target_model/weights.safetensors"  # Replace with your model checkpoint path 
+checkpoint_path = "target_model/weights.safetensors"  # Replace with your model checkpoint path
 state_dict = load_file(checkpoint_path, device="cpu")
 
-model = make_model() 
+model = make_model()
 model.load_state_dict(state_dict, strict=True)
 model.eval()
 
@@ -43,7 +43,7 @@ with torch.no_grad():
 print("True label:", y)
 print("Logits shape:", logits.shape)  # Should be [1, 100] for CIFAR-100
 print("Logits:", logits)
-   
+
 # # --------------------------------
 # # SUBMISSION FORMAT
 # # --------------------------------
@@ -57,7 +57,7 @@ The submission must be a .csv file with the following format:
 
 # Example Submission:
 
-subset_ids = list(range(360))  
+subset_ids = list(range(360))
 confidence_scores = torch.rand(len(subset_ids)).tolist()
 submission_df = pd.DataFrame({
     "id": subset_ids,
@@ -77,7 +77,7 @@ from torch.utils.data import DataLoader, Subset
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 SUSPECT_DIR = "suspect_models"
-N_PROBE = 512
+N_PROBE = 5000
 BATCH_SIZE = 128
 
 
@@ -184,6 +184,9 @@ print("Computing target logits...")
 target_logits, target_preds = collect_logits(model, probe_loader)
 target_probs = F.softmax(target_logits, dim=1)
 
+target_top2 = torch.topk(target_logits, k=2, dim=1).values
+target_margin = target_top2[:, 0] - target_top2[:, 1]
+
 target_sd = state_dict
 
 suspect_files = sorted(
@@ -219,6 +222,20 @@ for i, suspect_path in enumerate(suspect_files):
     logit_cos = F.cosine_similarity(target_logits, suspect_logits, dim=1).mean().item()
     pred_agree = (target_preds == suspect_preds).float().mean().item()
 
+    # Extra similarity on hard / low-margin target examples
+    low_margin_k = min(200, len(target_margin))
+    low_margin_idx = torch.argsort(target_margin)[:low_margin_k]
+
+    low_margin_logit_cos = F.cosine_similarity(
+        target_logits[low_margin_idx],
+        suspect_logits[low_margin_idx],
+        dim=1
+    ).mean().item()
+
+    low_margin_agree = (
+        target_preds[low_margin_idx] == suspect_preds[low_margin_idx]
+    ).float().mean().item()
+
     suspect_log_probs = F.log_softmax(suspect_logits, dim=1)
     kl = F.kl_div(suspect_log_probs, target_probs, reduction="batchmean").item()
 
@@ -229,6 +246,8 @@ for i, suspect_path in enumerate(suspect_files):
         "logit_cos": logit_cos,
         "pred_agree": pred_agree,
         "neg_kl": -kl,
+        "low_margin_logit_cos": low_margin_logit_cos,
+        "low_margin_agree": low_margin_agree,
     })
 
     del suspect_model
@@ -249,15 +268,25 @@ if missing:
 if df["id"].duplicated().any():
     raise ValueError("Duplicate model ids found")
 
-for col in ["weight_cos", "weight_l2", "logit_cos", "pred_agree", "neg_kl"]:
+for col in [
+    "weight_cos",
+    "weight_l2",
+    "logit_cos",
+    "pred_agree",
+    "neg_kl",
+    "low_margin_logit_cos",
+    "low_margin_agree",
+]:
     df[col + "_rank"] = rank_normalize(df[col].values)
 
 df["score"] = (
-    0.30 * df["weight_cos_rank"] +
-    0.20 * df["weight_l2_rank"] +
+    0.20 * df["weight_cos_rank"] +
+    0.15 * df["weight_l2_rank"] +
     0.25 * df["logit_cos_rank"] +
-    0.15 * df["pred_agree_rank"] +
-    0.10 * df["neg_kl_rank"]
+    0.10 * df["pred_agree_rank"] +
+    0.10 * df["neg_kl_rank"] +
+    0.15 * df["low_margin_logit_cos_rank"] +
+    0.05 * df["low_margin_agree_rank"]
 )
 
 df["score"] = df["score"].clip(0.0, 1.0)
