@@ -279,14 +279,22 @@ for col in [
 ]:
     df[col + "_rank"] = rank_normalize(df[col].values)
 
-df["score"] = (
-    0.20 * df["weight_cos_rank"] +
-    0.15 * df["weight_l2_rank"] +
-    0.25 * df["logit_cos_rank"] +
+df["weight_detector"] = (
+    0.70 * df["weight_cos_rank"] +
+    0.30 * df["weight_l2_rank"]
+)
+
+df["behavior_detector"] = (
+    0.30 * df["logit_cos_rank"] +
     0.10 * df["pred_agree_rank"] +
-    0.10 * df["neg_kl_rank"] +
-    0.15 * df["low_margin_logit_cos_rank"] +
-    0.05 * df["low_margin_agree_rank"]
+    0.20 * df["neg_kl_rank"] +
+    0.30 * df["low_margin_logit_cos_rank"] +
+    0.10 * df["low_margin_agree_rank"]
+)
+
+df["score"] = np.maximum(
+    df["weight_detector"],
+    0.95 * df["behavior_detector"]
 )
 
 df["score"] = df["score"].clip(0.0, 1.0)
