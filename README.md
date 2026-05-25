@@ -1,203 +1,156 @@
-# Assignment 2: Stolen Model Detection
+# Stolen-Model Detection — Assignment 2
 
-This repository implements a stolen-model detector for Assignment 2 using a combination of weight-based and behavior-based similarity signals.
+Detects which of 360 suspect CIFAR-100 ResNet-18 checkpoints were derived from a known target model.
 
-The detector follows the tutorial intuition that different stealing methods leave different traces:
+- **Metric:** TPR@5%FPR (higher is better)
+- **Current leaderboard score:** `0.611111`
+- **Detector entry point:** `task_template.py`
+- **Leaderboard submitter:** `submission.py`
 
-- Direct copies, checkpoint-derived models, and fine-tuned models leave traces in the weights.
-- Knockoff or distilled models may have different weights but similar behavior on probe inputs.
+## Repository layout
 
-Our method scores each of the 360 suspect models using:
-
-- Global weight cosine similarity
-- Global weight L2 similarity
-- Logit cosine similarity on CIFAR-100 probe images
-- Prediction agreement with the target model
-- KL-divergence-based similarity
-- Low-margin / hard-example logit similarity
-- Low-margin prediction agreement
-
-Best public leaderboard score reproduced:
-
-```text
-TPR@5%FPR = 0.555556
-````
-
-## Prerequisites
-
-The following files and folders must be present in the repository root:
-
-```text
-target_model/
-suspect_models/
-task_template.py
-submission.py
+```
+tml26_task2/
+├── task_template.py            # detector + scoring pipeline (produces submission.csv)
+├── submission.py               # uploads submission.csv to the leaderboard
+├── run_task_template.sh        # wrapper used by task_template.sub
+├── run_submit.sh               # wrapper used by submission.sub
+├── task_template.sub           # HTCondor submit file for scoring
+├── submission.sub              # HTCondor submit file for leaderboard upload
+├── target_model/
+│   ├── weights.safetensors     # target ResNet-18 checkpoint
+│   └── train_main_idx.json     # 40 000 indices of CIFAR-100 train samples used to train the target
+├── suspect_models/             # 360 suspect checkpoints (.safetensors)
+├── data/                       # CIFAR-100 (auto-downloaded by torchvision on first run)
+├── submission.csv              # final scores (id,score) — produced by task_template.py
+├── debug_scores.csv            # every per-suspect raw + ranked column (for inspection)
+└── runlogs/                    # HTCondor output / error / log files
 ```
 
-Expected model files:
+## How to reproduce the best result
+
+### 1. Requirements
+
+The scoring job runs in a `pytorch/pytorch:2.3.1-cuda12.1-cudnn8-devel` Docker container with one GPU. Extra Python packages needed:
 
 ```bash
-find target_model -name "*.safetensors" | wc -l
-find suspect_models -name "*.safetensors" | wc -l
-du -sh .
+pip install pandas safetensors requests
 ```
 
-Expected output:
+(All other dependencies — `torch`, `torchvision`, `numpy` — come from the base image.)
 
-```text
-1
-360
-around 16G
-```
+### 2. Expected inputs
 
-The model files are not included in the CMS ZIP. They should be downloaded separately from the Hugging Face repository for Task 2.
+Place the following before running:
 
-A CUDA GPU is recommended. The provided Condor setup uses the following Docker image:
+- `target_model/weights.safetensors` — provided target checkpoint
+- `target_model/train_main_idx.json` — provided target-training-index file
+- `suspect_models/<i>/weights.safetensors` (or `suspect_models/<i>.safetensors`) for `i = 0..359`
 
-```text
-pytorch/pytorch:2.3.1-cuda12.1-cudnn8-devel
-```
+CIFAR-100 is downloaded automatically into `./data/` on first run.
 
-The CIFAR-100 dataset is downloaded automatically by `torchvision` into `./data` when `task_template.py` is run.
+### 3. Run the scorer (HTCondor)
 
-## Reproduce
-
-### HTCondor
-
-From the repository root:
-
-```bash
-cd tml26_task2
-mkdir -p runlogs
-```
-
-### 1) Generate `submission.csv`
+From the cluster head node:
 
 ```bash
 condor_submit task_template.sub
 ```
 
-This runs `run_task_template.sh`, which executes `task_template.py`.
-
-The script:
-
-1. Loads the target CIFAR-style ResNet-18 model.
-2. Loads the 360 suspect models.
-3. Downloads/loads CIFAR-100 test images as probe data.
-4. Computes weight-similarity and behavior-similarity features.
-5. Writes:
-
-   * `submission.csv`
-   * `debug_scores.csv`
-
-After the job finishes, check:
+Inspect progress (each suspect ≈ 4 s; full run ≈ 1.3 h on a P100):
 
 ```bash
-cat runlogs/task2.*.out
-cat runlogs/task2.*.err
-wc -l submission.csv
-head submission.csv
+condor_q
+tail -f runlogs/task2.<cluster_id>.0.out
 ```
 
-Expected:
+When the job finishes you will have a refreshed `submission.csv` and a `debug_scores.csv`.
 
-```text
-361 submission.csv
+### 3b. Run the scorer locally (optional)
+
+```bash
+python task_template.py
 ```
 
-The file should have the format:
+Same outputs.
 
-```csv
-id,score
-0,0.2110027855153203
-1,0.012813370473537604
-...
-```
-
-### 2) Submit to the leaderboard
-
-Before submitting, edit `submission.py` and set:
-
-```python
-API_KEY = "YOUR_API_KEY_HERE"
-FILE_PATH = "submission.csv"
-SUBMIT = True
-```
-
-Then submit using Condor:
+### 4. Upload to the leaderboard
 
 ```bash
 condor_submit submission.sub
 ```
 
-This runs `run_submit.sh`, which executes `submission.py` and uploads `submission.csv` to the leaderboard server.
+(or `python submission.py` locally). The leaderboard enforces a ~6-minute cooldown between submissions.
 
-Check the submission logs:
+## Configuration knobs
 
-```bash
-cat runlogs/submit.*.out
-cat runlogs/submit.*.err
-```
+All knobs live at the top of `task_template.py`:
 
-A successful upload prints:
+| Constant            | Default | Meaning                                                  |
+|---------------------|---------|----------------------------------------------------------|
+| `N_TEST_PROBE`      | 5000    | CIFAR-100 test images used per suspect                   |
+| `N_TRAIN_PROBE`     | 5000    | target-train images (from `train_main_idx.json`)         |
+| `N_NONTRAIN_PROBE`  | 5000    | non-target-train images (rest of CIFAR-100 train)        |
+| `N_LOW_MARGIN`      | 300     | hard examples (lowest margin) used for focused similarity|
+| `N_NOISE_PROBE`     | 512     | Gaussian-noise inputs for the OOD fingerprint            |
+| `NOISE_SEED`        | 0       | RNG seed for the noise probe (fixed for reproducibility) |
+| `TOPK_JACCARD`      | 5       | k for top-k label-set Jaccard agreement                  |
+| `BATCH_SIZE`        | 128     | forward-pass batch size                                  |
 
-```text
-Successfully submitted.
-```
+Re-running with the defaults above reproduces the `submission.csv` that scored `0.611111`.
 
-## Quick sanity checks
+## Pipeline overview
 
-Before running the scoring job, verify that the model files are real and not Git LFS pointer files:
+`task_template.py` does the following:
 
-```bash
-du -sh .
-find target_model -name "*.safetensors" | wc -l
-find suspect_models -name "*.safetensors" | wc -l
-```
+1. Loads the target ResNet-18.
+2. Builds three natural-image probe loaders (`test`, `target_train`, `non_target_train`) and a fixed Gaussian-noise probe tensor.
+3. Computes target logits, softmax probs, avgpool features, predictions and labels on every probe.
+4. For each of the 360 suspects:
+   - Computes global and **layer-grouped** weight similarities (early / backbone / head / BN).
+   - Runs the suspect on every probe and computes 9 behavioural similarities per split (logit cosine, KL, pred agreement, conf/loss correlation, avgpool feature cosine, hard-example similarity, top-5 Jaccard).
+   - Runs the suspect on the Gaussian-noise probe (3 OOD signals).
+5. Rank-normalises every raw signal across the 360 suspects.
+6. Combines them into five composite detectors:
+   - `weight_detector`        — pure parameter similarity
+   - `behavior_detector`      — natural-image output similarity (test split)
+   - `feature_detector`       — penultimate-layer features (test split)
+   - `fingerprint_detector`   — target-training-subset signals + train/non-train gaps
+   - `noise_detector`         — Gaussian-noise OOD response
+7. Final score = `max` of `{weight, behavior+feature, behavior+fingerprint, noise, noise+behavior}` then rank-normalised and sharpened (`^1.15`).
 
-The full folder should be around 16 GB. If it is only a few MB, the model files were not downloaded correctly.
+The `max` is critical: TPR@5%FPR rewards the top 18 ranks, so a single strong signal should be enough to flag a stolen model.
 
-After generating `submission.csv`, verify:
+## Files produced
 
-```bash
-python - <<'PY'
-import pandas as pd
-import numpy as np
+- `submission.csv` — leaderboard format, two columns: `id`, `score`. 360 rows.
+- `debug_scores.csv` — every raw column + every rank + every composite detector. Used to debug ranking changes.
 
-df = pd.read_csv("submission.csv")
+## Results
 
-print("shape:", df.shape)
-print("columns:", list(df.columns))
-print("id min/max:", df["id"].min(), df["id"].max())
-print("unique ids:", df["id"].nunique())
-print("missing ids:", sorted(set(range(360)) - set(df["id"])))
-print("duplicate ids:", df["id"].duplicated().sum())
-print("finite scores:", np.isfinite(df["score"]).all())
-PY
-```
+The leaderboard metric is **TPR@5%FPR**, i.e. the fraction of stolen models that
+end up in the top 5% of predicted scores (top 18 of 360). Three iterations of
+the detector were submitted; the third is the current best.
 
-Expected:
+| Iteration | Submission ID | Scoring job | Detector summary                                                                                          | TPR@5%FPR     |
+|-----------|---------------|-------------|------------------------------------------------------------------------------------------------------------|---------------|
+| Baseline  | 1711          | `47744`     | global weight cosine/L2 + test-split logit cosine, agreement, KL, hard-example similarity; `max` fusion    | low baseline  |
+| It. 2     | 1778          | `47786`     | added grouped weights, features, train/non-train fingerprint, conf/loss correlation; trimmed-mean fusion   | regressed     |
+| **Final** | **1793**      | **`47814`** | reverted to `max` fusion + added Gaussian-noise OOD probe and top-5 label Jaccard                          | **`0.611111`** |
 
-```text
-shape: (360, 2)
-columns: ['id', 'score']
-id min/max: 0 359
-unique ids: 360
-missing ids: []
-duplicate ids: 0
-finite scores: True
-```
+Why the final iteration helps:
 
-## Files used to reproduce the result
+- **Gaussian-noise probe** adds a signal that is essentially uncorrelated with
+  natural-image behaviour. Independent ResNet-18s have noise-logit cosines in
+  `~0.1–0.3`; stolen / distilled copies stay close to `1.0`. This catches
+  suspects that the weight, feature and behaviour detectors all rank in the
+  middle of the pack.
+- **`max` fusion** is the right operator for TPR@5%FPR: any single strong
+  signal pushes a true stolen model into the top 18. The trimmed-mean variant
+  tried in iteration 2 averaged correlated detectors and pulled distilled
+  copies (low weight similarity, high behaviour) below the 5% FPR threshold.
+- **Top-5 label-set Jaccard** adds rank information beyond `argmax` and is
+  folded into both the behaviour and the training-fingerprint detectors.
 
-| File                   | Role                                                                                                                                        |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `task_template.py`     | Main scoring script. Loads the target and suspect models, computes similarity features, and writes `submission.csv` and `debug_scores.csv`. |
-| `submission.py`        | Uploads `submission.csv` to the leaderboard server using the provided API key.                                                              |
-| `run_task_template.sh` | Condor wrapper for running `task_template.py` inside the Docker container.                                                                  |
-| `task_template.sub`    | Condor submit file for generating `submission.csv`.                                                                                         |
-| `run_submit.sh`        | Condor wrapper for running `submission.py`.                                                                                                 |
-| `submission.sub`       | Condor submit file for uploading `submission.csv`.                                                                                          |
-| `README.md`            | Instructions to reproduce the result.                                                                                                       |
-```
-
+Reproducing `0.611111` requires no changes — just run the steps in
+*How to reproduce the best result* with the defaults in `task_template.py`.
