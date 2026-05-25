@@ -20,7 +20,7 @@ Our method scores each of the 360 suspect models using:
 Best public leaderboard score reproduced:
 
 ```text
-TPR@5%FPR = 0.462963
+TPR@5%FPR = 0.555556
 ````
 
 ## Prerequisites
