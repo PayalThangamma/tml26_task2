@@ -3,6 +3,8 @@ runlogs/
 suspect_models/
 target_model/
 
+.gitignore.save
+
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
