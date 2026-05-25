@@ -3,8 +3,18 @@ runlogs/
 suspect_models/
 target_model/
 
+<<<<<<< HEAD
 .gitignore.save
 
+=======
+<<<<<<< HEAD
+=======
+key
+key.pub
+.gitignore.save
+
+>>>>>>> 09b54c0 (Add gitignore)
+>>>>>>> 86e4f8c (Add gitignore)
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
